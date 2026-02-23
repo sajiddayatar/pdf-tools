@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PDF Reader — PDFTools</title>
+  <link rel="stylesheet" href="../css/style.css">
+  <style>
+    #canvas-container { margin-top: 1rem; text-align: center; }
+    #pdf-canvas { max-width: 100%; box-shadow: var(--shadow); }
+    .zoom-control { display: flex; align-items: center; gap: 0.5rem; }
+    .zoom-control input[type="range"] { width: 100px; accent-color: var(--accent); }
+  </style>
+</head>
+<body>
+
+<nav>
+  <a class="nav-logo" href="../index.html">PDF<span>Tools</span></a>
+</nav>
+
+<div class="tool-page">
+  <div class="tool-page-header">
+    <a class="back-link" href="../index.html">← Back to tools</a>
+    <h1>👁️ PDF Reader</h1>
+    <p>Open and view any PDF — navigate pages, zoom in/out, and search text.</p>
+  </div>
+
+  <div class="drop-zone" id="dropZone">
+    <input type="file" accept=".pdf" id="fileInput">
+    <div class="drop-icon">📄</div>
+    <h3>Drop your PDF here</h3>
+    <p>or click to browse</p>
+  </div>
+
+  <div id="viewer" style="display:none; margin-top:1.5rem">
+    <div class="viewer-controls">
+      <button class="btn btn-secondary" id="prevBtn">◀ Prev</button>
+      <span class="page-info" id="pageInfo">Page 1 of 1</span>
+      <button class="btn btn-secondary" id="nextBtn">Next ▶</button>
+      <div class="zoom-control">
+        <span style="font-size:0.78rem;color:var(--muted)">Zoom</span>
+        <input type="range" id="zoomRange" min="50" max="200" value="100" step="10">
+        <span id="zoomLabel" style="font-size:0.78rem;color:var(--muted)">100%</span>
+      </div>
+      <button class="btn btn-secondary" id="rotateBtn">↻ Rotate</button>
+    </div>
+    <div id="canvas-container">
+      <canvas id="pdf-canvas"></canvas>
+    </div>
+  </div>
+
+  <div class="status-msg" id="status"></div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script src="../js/common.js"></script>
+<script>
+  pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+
+  let pdfDoc = null, currentPage = 1, totalPages = 0, scale = 1, rotation = 0;
+  const canvas = document.getElementById('pdf-canvas');
+  const ctx = canvas.getContext('2d');
+
+  async function loadPDF(file) {
+    Utils.showStatus(document.getElementById('status'), 'Loading PDF...', 'info');
+    const arrayBuffer = await Utils.readFileAsArrayBuffer(file);
+    pdfDoc = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+    totalPages = pdfDoc.numPages;
+    currentPage = 1;
+    document.getElementById('viewer').style.display = 'block';
+    Utils.hideStatus(document.getElementById('status'));
+    renderPage();
+  }
+
+  async function renderPage() {
+    const page = await pdfDoc.getPage(currentPage);
+    const viewport = page.getViewport({ scale, rotation });
+    canvas.width = viewport.width;
+    canvas.height = viewport.height;
+    await page.render({ canvasContext: ctx, viewport }).promise;
+    document.getElementById('pageInfo').textContent = `Page ${currentPage} of ${totalPages}`;
+    document.getElementById('prevBtn').disabled = currentPage <= 1;
+    document.getElementById('nextBtn').disabled = currentPage >= totalPages;
+  }
+
+  Utils.setupDropZone(document.getElementById('dropZone'), files => {
+    if (files[0]) loadPDF(files[0]);
+  });
+
+  document.getElementById('prevBtn').onclick = () => { if (currentPage > 1) { currentPage--; renderPage(); }};
+  document.getElementById('nextBtn').onclick = () => { if (currentPage < totalPages) { currentPage++; renderPage(); }};
+  document.getElementById('rotateBtn').onclick = () => { rotation = (rotation + 90) % 360; renderPage(); };
+  document.getElementById('zoomRange').oninput = e => {
+    scale = e.target.value / 100;
+    document.getElementById('zoomLabel').textContent = e.target.value + '%';
+    if (pdfDoc) renderPage();
+  };
+</script>
+</body>
+</html>

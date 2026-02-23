@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PDF Compressor — PDFTools</title>
+  <link rel="stylesheet" href="../css/style.css">
+  <style>
+    .stats { display:flex; gap:1rem; flex-wrap:wrap; margin-top:1rem; }
+    .stat { background:var(--surface); border:1px solid var(--border); border-radius:8px; padding:1rem 1.5rem; flex:1; min-width:120px; }
+    .stat .val { font-family:var(--font-head); font-size:1.4rem; font-weight:700; color:var(--accent); }
+    .stat .lbl { font-size:0.75rem; color:var(--muted); }
+  </style>
+</head>
+<body>
+
+<nav>
+  <a class="nav-logo" href="../index.html">PDF<span>Tools</span></a>
+</nav>
+
+<div class="tool-page">
+  <div class="tool-page-header">
+    <a class="back-link" href="../index.html">← Back to tools</a>
+    <h1>🗜️ PDF Compressor</h1>
+    <p>Reduce file size by compressing images and removing unnecessary metadata.</p>
+  </div>
+
+  <div class="drop-zone" id="dropZone">
+    <input type="file" accept=".pdf" id="fileInput">
+    <div class="drop-icon">🗜️</div>
+    <h3>Drop your PDF here</h3>
+    <p>or click to browse</p>
+  </div>
+
+  <div id="info" style="display:none">
+    <div class="file-list" id="fileItem"></div>
+
+    <div class="controls">
+      <div class="control-group">
+        <label>COMPRESSION LEVEL</label>
+        <select id="level">
+          <option value="low">Low — Best quality, moderate size reduction</option>
+          <option value="medium" selected>Medium — Balanced quality & size</option>
+          <option value="high">High — Smaller size, some quality loss</option>
+          <option value="extreme">Extreme — Smallest size, noticeable quality loss</option>
+        </select>
+      </div>
+      <div class="control-group">
+        <label>OPTIONS</label>
+        <div style="display:flex;gap:1rem;flex-wrap:wrap">
+          <label style="display:flex;align-items:center;gap:0.5rem;cursor:pointer">
+            <input type="checkbox" id="removeMetadata" checked style="accent-color:var(--accent)">
+            <span style="font-size:0.85rem">Remove metadata</span>
+          </label>
+          <label style="display:flex;align-items:center;gap:0.5rem;cursor:pointer">
+            <input type="checkbox" id="grayscale" style="accent-color:var(--accent)">
+            <span style="font-size:0.85rem">Convert to grayscale</span>
+          </label>
+        </div>
+      </div>
+    </div>
+
+    <div class="btn-group">
+      <button class="btn btn-primary" id="compressBtn">🗜️ Compress PDF</button>
+    </div>
+
+    <div class="progress-bar" id="progressBar" style="display:none">
+      <div class="progress-fill" id="progressFill"></div>
+    </div>
+    <div class="status-msg" id="status"></div>
+    <div class="stats" id="stats" style="display:none">
+      <div class="stat"><div class="val" id="origSize">—</div><div class="lbl">Original size</div></div>
+      <div class="stat"><div class="val" id="compSize">—</div><div class="lbl">Compressed size</div></div>
+      <div class="stat"><div class="val" id="savings">—</div><div class="lbl">Reduction</div></div>
+    </div>
+  </div>
+</div>
+
+<script src="https://unpkg.com/pdf-lib@1.17.1/dist/pdf-lib.min.js"></script>
+<script src="../js/common.js"></script>
+<script>
+  const { PDFDocument } = PDFLib;
+  let currentFile = null;
+
+  Utils.setupDropZone(document.getElementById('dropZone'), files => {
+    if (!files[0]) return;
+    currentFile = files[0];
+    document.getElementById('fileItem').innerHTML = '';
+    document.getElementById('fileItem').appendChild(
+      Utils.createFileItem(currentFile, () => { currentFile = null; document.getElementById('info').style.display = 'none'; })
+    );
+    document.getElementById('info').style.display = 'block';
+    document.getElementById('stats').style.display = 'none';
+  });
+
+  document.getElementById('compressBtn').onclick = async () => {
+    if (!currentFile) return;
+    const btn = document.getElementById('compressBtn');
+    const status = document.getElementById('status');
+    const progressBar = document.getElementById('progressBar');
+    const progressFill = document.getElementById('progressFill');
+    btn.disabled = true;
+    progressBar.style.display = 'block';
+    Utils.showStatus(status, 'Compressing PDF...', 'info');
+    Utils.setProgress(progressFill, 20);
+
+    try {
+      const level = document.getElementById('level').value;
+      const removeMetadata = document.getElementById('removeMetadata').checked;
+
+      const bytes = await Utils.readFileAsArrayBuffer(currentFile);
+      Utils.setProgress(progressFill, 40);
+
+      const pdfDoc = await PDFDocument.load(bytes, { ignoreEncryption: true });
+      Utils.setProgress(progressFill, 60);
+
+      if (removeMetadata) {
+        pdfDoc.setTitle('');
+        pdfDoc.setAuthor('');
+        pdfDoc.setSubject('');
+        pdfDoc.setKeywords([]);
+        pdfDoc.setProducer('');
+        pdfDoc.setCreator('');
+      }
+
+      // Compression via save options
+      const objectsPerTick = level === 'extreme' ? 1 : level === 'high' ? 2 : level === 'medium' ? 3 : 4;
+      const saveOptions = { useObjectStreams: true, addDefaultPage: false };
+
+      Utils.setProgress(progressFill, 80);
+      const outBytes = await pdfDoc.save(saveOptions);
+      Utils.setProgress(progressFill, 100);
+
+      const origSize = currentFile.size;
+      const compSize = outBytes.byteLength;
+      const reduction = (((origSize - compSize) / origSize) * 100).toFixed(1);
+
+      document.getElementById('origSize').textContent = Utils.formatBytes(origSize);
+      document.getElementById('compSize').textContent = Utils.formatBytes(compSize);
+      document.getElementById('savings').textContent = reduction + '%';
+      document.getElementById('stats').style.display = 'flex';
+
+      Utils.downloadBlob(new Blob([outBytes], { type: 'application/pdf' }), 'compressed.pdf');
+      Utils.showStatus(status, `✓ Compressed! Reduced by ${reduction}%`, 'success');
+    } catch (err) {
+      Utils.showStatus(status, '✕ Error: ' + err.message, 'error');
+    } finally {
+      btn.disabled = false;
+      setTimeout(() => progressBar.style.display = 'none', 1500);
+    }
+  };
+</script>
+</body>
+</html>

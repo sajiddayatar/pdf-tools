@@ -1,0 +1,255 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Excel to PDF — PDFTools</title>
+  <link rel="stylesheet" href="../css/style.css">
+  <style>
+    #tablePreview { overflow-x:auto; margin-top:1.5rem; }
+    #tablePreview table { border-collapse:collapse; width:100%; font-size:0.8rem; }
+    #tablePreview th { background:var(--surface2); color:var(--text); border:1px solid var(--border); padding:0.5rem 0.75rem; text-align:left; }
+    #tablePreview td { border:1px solid var(--border); padding:0.4rem 0.75rem; color:var(--muted); }
+    #tablePreview tr:nth-child(even) td { background:rgba(255,255,255,0.02); }
+    .sheet-tabs { display:flex; gap:0.5rem; flex-wrap:wrap; margin-bottom:1rem; }
+    .sheet-tab { background:var(--surface2); border:1px solid var(--border); border-radius:6px; padding:0.3rem 0.8rem; font-size:0.78rem; cursor:pointer; color:var(--muted); transition:all 0.2s; }
+    .sheet-tab.active { background:var(--accent); border-color:var(--accent); color:#fff; }
+  </style>
+</head>
+<body>
+
+<nav>
+  <a class="nav-logo" href="../index.html">PDF<span>Tools</span></a>
+</nav>
+
+<div class="tool-page">
+  <div class="tool-page-header">
+    <a class="back-link" href="../index.html">← Back to tools</a>
+    <h1>📊 Excel → PDF</h1>
+    <p>Convert Excel spreadsheets (.xlsx, .xls, .csv) to PDF with table formatting.</p>
+  </div>
+
+  <div class="drop-zone" id="dropZone">
+    <input type="file" accept=".xlsx,.xls,.csv" id="fileInput">
+    <div class="drop-icon">📊</div>
+    <h3>Drop your spreadsheet here</h3>
+    <p>Supports .xlsx, .xls, and .csv files</p>
+  </div>
+
+  <div id="info" style="display:none">
+    <div class="file-list" id="fileItem"></div>
+
+    <div class="controls" style="margin-top:1.5rem">
+      <div class="control-row">
+        <div class="control-group">
+          <label>PAGE SIZE</label>
+          <select id="pageSize">
+            <option value="A4">A4 (Portrait)</option>
+            <option value="A4L" selected>A4 (Landscape)</option>
+            <option value="Letter">Letter</option>
+            <option value="LetterL">Letter (Landscape)</option>
+          </select>
+        </div>
+        <div class="control-group">
+          <label>FONT SIZE</label>
+          <input type="number" id="fontSize" value="9" min="6" max="16">
+        </div>
+      </div>
+      <div class="control-group">
+        <label>OPTIONS</label>
+        <div style="display:flex;gap:1.5rem;flex-wrap:wrap">
+          <label style="display:flex;align-items:center;gap:0.5rem;cursor:pointer;font-size:0.85rem">
+            <input type="checkbox" id="headerRow" checked style="accent-color:var(--accent)"> Treat first row as header
+          </label>
+          <label style="display:flex;align-items:center;gap:0.5rem;cursor:pointer;font-size:0.85rem">
+            <input type="checkbox" id="addTitle" checked style="accent-color:var(--accent)"> Add sheet name as title
+          </label>
+          <label style="display:flex;align-items:center;gap:0.5rem;cursor:pointer;font-size:0.85rem">
+            <input type="checkbox" id="pageNums" checked style="accent-color:var(--accent)"> Add page numbers
+          </label>
+          <label style="display:flex;align-items:center;gap:0.5rem;cursor:pointer;font-size:0.85rem">
+            <input type="checkbox" id="allSheets" style="accent-color:var(--accent)"> Include all sheets
+          </label>
+        </div>
+      </div>
+    </div>
+
+    <div class="sheet-tabs" id="sheetTabs"></div>
+
+    <div class="btn-group">
+      <button class="btn btn-primary" id="convertBtn">📊 Convert to PDF</button>
+    </div>
+
+    <div class="progress-bar" id="progressBar" style="display:none">
+      <div class="progress-fill" id="progressFill"></div>
+    </div>
+    <div class="status-msg" id="status"></div>
+
+    <div id="tablePreview"></div>
+  </div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://unpkg.com/pdf-lib@1.17.1/dist/pdf-lib.min.js"></script>
+<script src="../js/common.js"></script>
+<script>
+  const { PDFDocument, rgb, StandardFonts } = PDFLib;
+  let workbook = null, currentSheet = 0, currentFile = null;
+
+  Utils.setupDropZone(document.getElementById('dropZone'), async files => {
+    if (!files[0]) return;
+    currentFile = files[0];
+    document.getElementById('fileItem').innerHTML = '';
+    document.getElementById('fileItem').appendChild(
+      Utils.createFileItem(currentFile, () => { currentFile = null; document.getElementById('info').style.display = 'none'; })
+    );
+    document.getElementById('info').style.display = 'block';
+    await loadWorkbook(currentFile);
+  });
+
+  async function loadWorkbook(file) {
+    Utils.showStatus(document.getElementById('status'), 'Parsing spreadsheet...', 'info');
+    const ab = await Utils.readFileAsArrayBuffer(file);
+    workbook = XLSX.read(ab, { type: 'array' });
+    currentSheet = 0;
+    renderTabs();
+    renderPreview();
+    Utils.hideStatus(document.getElementById('status'));
+  }
+
+  function renderTabs() {
+    const tabs = document.getElementById('sheetTabs');
+    tabs.innerHTML = '';
+    workbook.SheetNames.forEach((name, i) => {
+      const tab = document.createElement('button');
+      tab.className = 'sheet-tab' + (i === currentSheet ? ' active' : '');
+      tab.textContent = name;
+      tab.onclick = () => { currentSheet = i; renderTabs(); renderPreview(); };
+      tabs.appendChild(tab);
+    });
+  }
+
+  function renderPreview() {
+    const sheet = workbook.Sheets[workbook.SheetNames[currentSheet]];
+    const data = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
+    if (!data.length) { document.getElementById('tablePreview').innerHTML = '<p style="color:var(--muted);font-size:0.85rem">Empty sheet</p>'; return; }
+
+    const preview = data.slice(0, 20);
+    let html = '<table><thead><tr>';
+    const headers = document.getElementById('headerRow').checked ? preview[0] : preview[0].map((_, i) => String.fromCharCode(65 + i));
+    headers.forEach(h => html += `<th>${h}</th>`);
+    html += '</tr></thead><tbody>';
+    const rows = document.getElementById('headerRow').checked ? preview.slice(1) : preview;
+    rows.forEach(row => {
+      html += '<tr>';
+      row.forEach(cell => html += `<td>${cell !== null && cell !== undefined ? cell : ''}</td>`);
+      html += '</tr>';
+    });
+    html += '</tbody></table>';
+    if (data.length > 20) html += `<p style="color:var(--muted);font-size:0.75rem;margin-top:0.5rem">Showing first 20 rows of ${data.length}</p>`;
+    document.getElementById('tablePreview').innerHTML = html;
+  }
+
+  document.getElementById('headerRow').onchange = renderPreview;
+
+  document.getElementById('convertBtn').onclick = async () => {
+    if (!workbook) return;
+    const btn = document.getElementById('convertBtn');
+    btn.disabled = true;
+    const status = document.getElementById('status');
+    const progressBar = document.getElementById('progressBar');
+    const progressFill = document.getElementById('progressFill');
+    progressBar.style.display = 'block';
+    Utils.showStatus(status, 'Converting to PDF...', 'info');
+
+    try {
+      const pdfDoc = await PDFDocument.create();
+      const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
+      const boldFont = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
+
+      const sizeMap = { A4: [595,842], A4L: [842,595], Letter: [612,792], LetterL: [792,612] };
+      const [pgW, pgH] = sizeMap[document.getElementById('pageSize').value];
+      const fontSize = parseInt(document.getElementById('fontSize').value) || 9;
+      const margin = 40;
+      const useHeader = document.getElementById('headerRow').checked;
+      const addTitle = document.getElementById('addTitle').checked;
+      const addPageNums = document.getElementById('pageNums').checked;
+      const allSheets = document.getElementById('allSheets').checked;
+
+      const sheetsToConvert = allSheets ? workbook.SheetNames.map((_, i) => i) : [currentSheet];
+
+      let allPages = [];
+
+      for (const shIdx of sheetsToConvert) {
+        const sheet = workbook.Sheets[workbook.SheetNames[shIdx]];
+        const data = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
+        if (!data.length) continue;
+
+        const headers = useHeader ? data[0] : null;
+        const rows = useHeader ? data.slice(1) : data;
+        const colCount = Math.max(...data.map(r => r.length));
+        const colWidth = Math.floor((pgW - margin * 2) / colCount);
+        const rowH = fontSize + 8;
+
+        let page = pdfDoc.addPage([pgW, pgH]);
+        allPages.push(page);
+        let y = pgH - margin;
+
+        if (addTitle) {
+          const title = workbook.SheetNames[shIdx];
+          page.drawText(title, { x: margin, y, size: fontSize + 4, font: boldFont, color: rgb(0.1,0.1,0.1) });
+          y -= rowH + 8;
+        }
+
+        function drawRow(rowData, isBold) {
+          if (y < margin + rowH) {
+            page = pdfDoc.addPage([pgW, pgH]);
+            allPages.push(page);
+            y = pgH - margin;
+          }
+          rowData.forEach((cell, ci) => {
+            const cellText = String(cell !== null && cell !== undefined ? cell : '');
+            const x = margin + ci * colWidth;
+            // cell bg for header
+            if (isBold) {
+              page.drawRectangle({ x, y: y - 4, width: colWidth - 1, height: rowH + 2, color: rgb(0.9,0.9,0.9) });
+            }
+            // clip text to cell width
+            const maxChars = Math.floor(colWidth / (fontSize * 0.55));
+            const displayText = cellText.length > maxChars ? cellText.slice(0, maxChars - 1) + '…' : cellText;
+            if (displayText) {
+              page.drawText(displayText, { x: x + 2, y: y, size: fontSize, font: isBold ? boldFont : font, color: rgb(0.15,0.15,0.15) });
+            }
+          });
+          // row border
+          page.drawLine({ start:{x:margin,y:y-4}, end:{x:pgW-margin,y:y-4}, thickness:0.3, color:rgb(0.75,0.75,0.75) });
+          y -= rowH;
+        }
+
+        if (headers) drawRow(headers, true);
+        rows.forEach(row => drawRow(row, false));
+        Utils.setProgress(progressFill, 50 + (sheetsToConvert.indexOf(shIdx) / sheetsToConvert.length) * 50);
+      }
+
+      if (addPageNums) {
+        allPages.forEach((pg, i) => {
+          const txt = `${i+1} / ${allPages.length}`;
+          const w = font.widthOfTextAtSize(txt, 8);
+          pg.drawText(txt, { x: (pgW-w)/2, y: margin/2, size:8, font, color:rgb(0.5,0.5,0.5) });
+        });
+      }
+
+      const outBytes = await pdfDoc.save();
+      Utils.downloadBlob(new Blob([outBytes], { type:'application/pdf' }), currentFile.name.replace(/\.(xlsx|xls|csv)$/, '') + '.pdf');
+      Utils.setProgress(progressFill, 100);
+      Utils.showStatus(status, `✓ Converted to PDF (${allPages.length} pages)!`, 'success');
+    } catch (err) {
+      Utils.showStatus(status, '✕ Error: ' + err.message, 'error');
+    } finally {
+      btn.disabled = false;
+      setTimeout(() => progressBar.style.display = 'none', 1500);
+    }
+  };
+</script>
+</body>
+</html>

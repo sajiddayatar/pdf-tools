@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Remove Password — PDFTools</title>
+  <link rel="stylesheet" href="../css/style.css">
+</head>
+<body>
+
+<nav>
+  <a class="nav-logo" href="../index.html">PDF<span>Tools</span></a>
+</nav>
+
+<div class="tool-page">
+  <div class="tool-page-header">
+    <a class="back-link" href="../index.html">← Back to tools</a>
+    <h1>🔓 Remove Password</h1>
+    <p>Provide the current password to unlock and save an unprotected copy.</p>
+  </div>
+
+  <div class="drop-zone" id="dropZone">
+    <input type="file" accept=".pdf" id="fileInput">
+    <div class="drop-icon">🔓</div>
+    <h3>Drop your password-protected PDF</h3>
+    <p>or click to browse</p>
+  </div>
+
+  <div id="info" style="display:none">
+    <div class="file-list" id="fileItem"></div>
+
+    <div class="controls">
+      <div class="control-group">
+        <label>CURRENT PASSWORD</label>
+        <input type="password" id="password" placeholder="Enter the PDF password">
+      </div>
+    </div>
+
+    <div class="btn-group">
+      <button class="btn btn-primary" id="unlockBtn">🔓 Unlock PDF</button>
+    </div>
+
+    <div class="progress-bar" id="progressBar" style="display:none">
+      <div class="progress-fill" id="progressFill"></div>
+    </div>
+    <div class="status-msg" id="status"></div>
+  </div>
+</div>
+
+<script src="https://unpkg.com/pdf-lib@1.17.1/dist/pdf-lib.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script src="../js/common.js"></script>
+<script>
+  const { PDFDocument } = PDFLib;
+  pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+
+  let currentFile = null;
+
+  Utils.setupDropZone(document.getElementById('dropZone'), files => {
+    if (!files[0]) return;
+    currentFile = files[0];
+    document.getElementById('fileItem').innerHTML = '';
+    document.getElementById('fileItem').appendChild(
+      Utils.createFileItem(currentFile, () => { currentFile = null; document.getElementById('info').style.display = 'none'; })
+    );
+    document.getElementById('info').style.display = 'block';
+    Utils.hideStatus(document.getElementById('status'));
+  });
+
+  document.getElementById('unlockBtn').onclick = async () => {
+    const password = document.getElementById('password').value;
+    if (!password) { Utils.showStatus(document.getElementById('status'), '✕ Please enter the password.', 'error'); return; }
+    if (!currentFile) return;
+
+    const btn = document.getElementById('unlockBtn');
+    btn.disabled = true;
+    const status = document.getElementById('status');
+    const progressBar = document.getElementById('progressBar');
+    const progressFill = document.getElementById('progressFill');
+    progressBar.style.display = 'block';
+    Utils.showStatus(status, 'Unlocking PDF...', 'info');
+    Utils.setProgress(progressFill, 30);
+
+    try {
+      const bytes = await Utils.readFileAsArrayBuffer(currentFile);
+      
+      // Try to load with pdf-lib using password
+      let pdfDoc;
+      try {
+        pdfDoc = await PDFDocument.load(bytes, { 
+          password,
+          ignoreEncryption: false 
+        });
+      } catch (e) {
+        // Try pdfjs to verify password first
+        try {
+          await pdfjsLib.getDocument({ data: bytes, password }).promise;
+        } catch (e2) {
+          throw new Error('Incorrect password or unsupported encryption.');
+        }
+        // If pdfjs succeeded, load with ignoreEncryption
+        pdfDoc = await PDFDocument.load(bytes, { ignoreEncryption: true });
+      }
+
+      Utils.setProgress(progressFill, 70);
+
+      // Save without encryption
+      const outBytes = await pdfDoc.save();
+      Utils.setProgress(progressFill, 100);
+
+      Utils.downloadBlob(new Blob([outBytes], { type: 'application/pdf' }), 'unlocked.pdf');
+      Utils.showStatus(status, '✓ PDF unlocked successfully!', 'success');
+    } catch (err) {
+      Utils.showStatus(status, '✕ ' + err.message, 'error');
+    } finally {
+      btn.disabled = false;
+      setTimeout(() => progressBar.style.display = 'none', 1500);
+    }
+  };
+</script>
+</body>
+</html>

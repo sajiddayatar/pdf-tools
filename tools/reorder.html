@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Reorder / Delete / Rotate — PDFTools</title>
+  <link rel="stylesheet" href="../css/style.css">
+  <style>
+    .pages-grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(130px,1fr)); gap:1rem; margin-top:1.5rem; }
+    .page-thumb { background:var(--surface); border:2px solid var(--border); border-radius:8px; padding:0.5rem; cursor:grab; text-align:center; position:relative; transition:all 0.2s; }
+    .page-thumb:hover { border-color:var(--accent); }
+    .page-thumb.selected { border-color:var(--success); }
+    .page-thumb.deleted { opacity:0.3; border-style:dashed; }
+    .page-thumb canvas { width:100%; border-radius:4px; }
+    .page-num { font-size:0.7rem; color:var(--muted); margin-top:0.4rem; }
+    .page-actions { display:flex; justify-content:center; gap:4px; margin-top:0.4rem; }
+    .page-action-btn { background:var(--surface2); border:1px solid var(--border); color:var(--text); border-radius:4px; padding:2px 6px; font-size:0.65rem; cursor:pointer; transition:all 0.15s; }
+    .page-action-btn:hover { background:var(--accent); border-color:var(--accent); color:#fff; }
+    .page-thumb.drag-over { border-color:var(--accent); background:rgba(255,85,51,0.1); transform:scale(1.03); }
+  </style>
+</head>
+<body>
+
+<nav>
+  <a class="nav-logo" href="../index.html">PDF<span>Tools</span></a>
+</nav>
+
+<div class="tool-page">
+  <div class="tool-page-header">
+    <a class="back-link" href="../index.html">← Back to tools</a>
+    <h1>🔀 Reorder / Delete / Rotate</h1>
+    <p>Drag to reorder pages, rotate individual pages, or delete unwanted ones.</p>
+  </div>
+
+  <div class="drop-zone" id="dropZone">
+    <input type="file" accept=".pdf" id="fileInput">
+    <div class="drop-icon">🔀</div>
+    <h3>Drop your PDF here</h3>
+    <p>or click to browse</p>
+  </div>
+
+  <div id="editor" style="display:none">
+    <div class="btn-group" style="margin-top:1.5rem">
+      <button class="btn btn-secondary" id="selectAllBtn">☑ Select All</button>
+      <button class="btn btn-secondary" id="deleteSelectedBtn">🗑 Delete Selected</button>
+      <button class="btn btn-secondary" id="rotateAllBtn">↻ Rotate All 90°</button>
+      <button class="btn btn-primary" id="saveBtn">💾 Save PDF</button>
+    </div>
+
+    <div class="pages-grid" id="pagesGrid"></div>
+    <div class="status-msg" id="status"></div>
+  </div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script src="https://unpkg.com/pdf-lib@1.17.1/dist/pdf-lib.min.js"></script>
+<script src="../js/common.js"></script>
+<script>
+  const { PDFDocument, degrees } = PDFLib;
+  pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+
+  let pdfDoc = null, pdfJsDoc = null, pageStates = [], currentFile = null;
+  let dragSrc = null;
+
+  const grid = document.getElementById('pagesGrid');
+  const status = document.getElementById('status');
+
+  Utils.setupDropZone(document.getElementById('dropZone'), async files => {
+    if (!files[0]) return;
+    currentFile = files[0];
+    await loadPDF(currentFile);
+  });
+
+  async function loadPDF(file) {
+    Utils.showStatus(status, 'Loading pages...', 'info');
+    const bytes = await Utils.readFileAsArrayBuffer(file);
+    pdfJsDoc = await pdfjsLib.getDocument({ data: bytes }).promise;
+    pdfDoc = await PDFDocument.load(bytes, { ignoreEncryption: true });
+    pageStates = Array.from({ length: pdfDoc.getPageCount() }, (_, i) => ({
+      index: i,
+      rotation: 0,
+      deleted: false,
+      selected: false
+    }));
+    document.getElementById('editor').style.display = 'block';
+    Utils.hideStatus(status);
+    await renderThumbs();
+  }
+
+  async function renderThumbs() {
+    grid.innerHTML = '';
+    for (let i = 0; i < pageStates.length; i++) {
+      const state = pageStates[i];
+      const thumb = document.createElement('div');
+      thumb.className = 'page-thumb' + (state.deleted ? ' deleted' : '') + (state.selected ? ' selected' : '');
+      thumb.draggable = !state.deleted;
+      thumb.dataset.idx = i;
+
+      const canvas = document.createElement('canvas');
+      const page = await pdfJsDoc.getPage(state.index + 1);
+      const viewport = page.getViewport({ scale: 0.3, rotation: state.rotation });
+      canvas.width = viewport.width;
+      canvas.height = viewport.height;
+      await page.render({ canvasContext: canvas.getContext('2d'), viewport }).promise;
+
+      thumb.innerHTML = `
+        <div class="page-num">Page ${state.index + 1}</div>
+        <div class="page-actions">
+          <button class="page-action-btn rotate-btn" title="Rotate">↻</button>
+          <button class="page-action-btn delete-btn" title="${state.deleted ? 'Restore' : 'Delete'}">${state.deleted ? '↺' : '🗑'}</button>
+        </div>
+      `;
+      thumb.insertBefore(canvas, thumb.firstChild);
+
+      thumb.querySelector('.rotate-btn').onclick = (e) => { e.stopPropagation(); state.rotation = (state.rotation + 90) % 360; renderThumbs(); };
+      thumb.querySelector('.delete-btn').onclick = (e) => { e.stopPropagation(); state.deleted = !state.deleted; renderThumbs(); };
+      thumb.onclick = () => { if (!state.deleted) { state.selected = !state.selected; thumb.classList.toggle('selected'); }};
+
+      // Drag & Drop
+      thumb.addEventListener('dragstart', () => { dragSrc = i; thumb.style.opacity = '0.4'; });
+      thumb.addEventListener('dragend', () => thumb.style.opacity = '1');
+      thumb.addEventListener('dragover', e => { e.preventDefault(); thumb.classList.add('drag-over'); });
+      thumb.addEventListener('dragleave', () => thumb.classList.remove('drag-over'));
+      thumb.addEventListener('drop', e => {
+        e.preventDefault();
+        thumb.classList.remove('drag-over');
+        if (dragSrc !== null && dragSrc !== i) {
+          const moved = pageStates.splice(dragSrc, 1)[0];
+          pageStates.splice(i, 0, moved);
+          renderThumbs();
+        }
+      });
+
+      grid.appendChild(thumb);
+    }
+  }
+
+  document.getElementById('selectAllBtn').onclick = () => {
+    const anySelected = pageStates.some(s => s.selected && !s.deleted);
+    pageStates.forEach(s => { if (!s.deleted) s.selected = !anySelected; });
+    renderThumbs();
+  };
+
+  document.getElementById('deleteSelectedBtn').onclick = () => {
+    pageStates.forEach(s => { if (s.selected) s.deleted = true; s.selected = false; });
+    renderThumbs();
+  };
+
+  document.getElementById('rotateAllBtn').onclick = () => {
+    pageStates.forEach(s => { if (!s.deleted) s.rotation = (s.rotation + 90) % 360; });
+    renderThumbs();
+  };
+
+  document.getElementById('saveBtn').onclick = async () => {
+    const btn = document.getElementById('saveBtn');
+    btn.disabled = true;
+    Utils.showStatus(status, 'Saving PDF...', 'info');
+    try {
+      const bytes = await Utils.readFileAsArrayBuffer(currentFile);
+      const srcDoc = await PDFDocument.load(bytes, { ignoreEncryption: true });
+      const newDoc = await PDFDocument.create();
+
+      const activeStates = pageStates.filter(s => !s.deleted);
+      const pageIndices = activeStates.map(s => s.index);
+      const copiedPages = await newDoc.copyPages(srcDoc, pageIndices);
+
+      copiedPages.forEach((page, i) => {
+        const rot = activeStates[i].rotation;
+        if (rot) page.setRotation(degrees(rot));
+        newDoc.addPage(page);
+      });
+
+      const outBytes = await newDoc.save();
+      Utils.downloadBlob(new Blob([outBytes], { type: 'application/pdf' }), 'edited.pdf');
+      Utils.showStatus(status, `✓ Saved PDF with ${copiedPages.length} pages!`, 'success');
+    } catch (err) {
+      Utils.showStatus(status, '✕ Error: ' + err.message, 'error');
+    } finally {
+      btn.disabled = false;
+    }
+  };
+</script>
+</body>
+</html>

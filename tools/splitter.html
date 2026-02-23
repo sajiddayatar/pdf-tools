@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PDF Splitter — PDFTools</title>
+  <link rel="stylesheet" href="../css/style.css">
+</head>
+<body>
+
+<nav>
+  <a class="nav-logo" href="../index.html">PDF<span>Tools</span></a>
+</nav>
+
+<div class="tool-page">
+  <div class="tool-page-header">
+    <a class="back-link" href="../index.html">← Back to tools</a>
+    <h1>✂️ PDF Splitter</h1>
+    <p>Split a PDF into separate files by page ranges or extract every page individually.</p>
+  </div>
+
+  <div class="drop-zone" id="dropZone">
+    <input type="file" accept=".pdf" id="fileInput">
+    <div class="drop-icon">✂️</div>
+    <h3>Drop your PDF here</h3>
+    <p>or click to browse</p>
+  </div>
+
+  <div id="info" style="display:none">
+    <div class="file-list" id="fileItem"></div>
+
+    <div class="controls">
+      <div class="control-group">
+        <label>SPLIT MODE</label>
+        <select id="splitMode">
+          <option value="range">Custom page ranges</option>
+          <option value="every">Extract every page separately</option>
+          <option value="fixed">Fixed size (every N pages)</option>
+        </select>
+      </div>
+      <div class="control-group" id="rangeGroup">
+        <label>PAGE RANGES (e.g. 1-3, 5, 7-9)</label>
+        <input type="text" id="rangeInput" placeholder="1-3, 5, 7-9">
+        <small style="color:var(--muted);font-size:0.75rem">Separate ranges with commas. Total pages: <span id="totalPages">?</span></small>
+      </div>
+      <div class="control-group" id="fixedGroup" style="display:none">
+        <label>PAGES PER CHUNK</label>
+        <input type="number" id="fixedN" value="5" min="1">
+      </div>
+    </div>
+
+    <div class="btn-group">
+      <button class="btn btn-primary" id="splitBtn">✂️ Split PDF</button>
+    </div>
+
+    <div class="progress-bar" id="progressBar" style="display:none">
+      <div class="progress-fill" id="progressFill"></div>
+    </div>
+    <div class="status-msg" id="status"></div>
+  </div>
+</div>
+
+<script src="https://unpkg.com/pdf-lib@1.17.1/dist/pdf-lib.min.js"></script>
+<script src="../js/common.js"></script>
+<script>
+  const { PDFDocument } = PDFLib;
+  let currentFile = null, totalPages = 0;
+
+  const dropZone = document.getElementById('dropZone');
+  const info = document.getElementById('info');
+  const status = document.getElementById('status');
+  const progressBar = document.getElementById('progressBar');
+  const progressFill = document.getElementById('progressFill');
+
+  document.getElementById('splitMode').onchange = e => {
+    document.getElementById('rangeGroup').style.display = e.target.value === 'range' ? '' : 'none';
+    document.getElementById('fixedGroup').style.display = e.target.value === 'fixed' ? '' : 'none';
+  };
+
+  Utils.setupDropZone(dropZone, files => {
+    if (!files[0]) return;
+    currentFile = files[0];
+    loadPDF();
+  });
+
+  async function loadPDF() {
+    const bytes = await Utils.readFileAsArrayBuffer(currentFile);
+    const doc = await PDFDocument.load(bytes, { ignoreEncryption: true });
+    totalPages = doc.getPageCount();
+    document.getElementById('totalPages').textContent = totalPages;
+    document.getElementById('fileItem').innerHTML = '';
+    document.getElementById('fileItem').appendChild(
+      Utils.createFileItem(currentFile, () => { currentFile = null; info.style.display = 'none'; })
+    );
+    info.style.display = 'block';
+  }
+
+  function parseRanges(str, total) {
+    const ranges = [];
+    str.split(',').forEach(part => {
+      part = part.trim();
+      if (part.includes('-')) {
+        const [a, b] = part.split('-').map(Number);
+        if (a && b && a <= b && a >= 1 && b <= total) {
+          ranges.push({ start: a, end: b });
+        }
+      } else {
+        const n = parseInt(part);
+        if (n >= 1 && n <= total) ranges.push({ start: n, end: n });
+      }
+    });
+    return ranges;
+  }
+
+  document.getElementById('splitBtn').onclick = async () => {
+    if (!currentFile) return;
+    const mode = document.getElementById('splitMode').value;
+    const btn = document.getElementById('splitBtn');
+    btn.disabled = true;
+    progressBar.style.display = 'block';
+    Utils.showStatus(status, 'Splitting...', 'info');
+
+    try {
+      const bytes = await Utils.readFileAsArrayBuffer(currentFile);
+      const srcDoc = await PDFDocument.load(bytes, { ignoreEncryption: true });
+      let chunks = [];
+
+      if (mode === 'every') {
+        for (let i = 0; i < totalPages; i++) chunks.push([i]);
+      } else if (mode === 'fixed') {
+        const n = parseInt(document.getElementById('fixedN').value) || 5;
+        for (let i = 0; i < totalPages; i += n) {
+          chunks.push(Array.from({ length: Math.min(n, totalPages - i) }, (_, j) => i + j));
+        }
+      } else {
+        const rangeStr = document.getElementById('rangeInput').value;
+        const ranges = parseRanges(rangeStr, totalPages);
+        if (!ranges.length) { Utils.showStatus(status, 'Invalid ranges', 'error'); btn.disabled = false; return; }
+        chunks = ranges.map(r => Array.from({ length: r.end - r.start + 1 }, (_, j) => r.start - 1 + j));
+      }
+
+      for (let i = 0; i < chunks.length; i++) {
+        Utils.setProgress(progressFill, ((i + 1) / chunks.length) * 100);
+        const newDoc = await PDFDocument.create();
+        const pages = await newDoc.copyPages(srcDoc, chunks[i]);
+        pages.forEach(p => newDoc.addPage(p));
+        const outBytes = await newDoc.save();
+        const name = currentFile.name.replace('.pdf', '');
+        Utils.downloadBlob(new Blob([outBytes], { type: 'application/pdf' }), `${name}_part${i + 1}.pdf`);
+        await new Promise(r => setTimeout(r, 200));
+      }
+
+      Utils.showStatus(status, `✓ Created ${chunks.length} PDF file(s)`, 'success');
+    } catch (err) {
+      Utils.showStatus(status, '✕ Error: ' + err.message, 'error');
+    } finally {
+      btn.disabled = false;
+      setTimeout(() => progressBar.style.display = 'none', 1500);
+    }
+  };
+</script>
+</body>
+</html>

@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PDF Merger — PDFTools</title>
+  <link rel="stylesheet" href="../css/style.css">
+  <style>
+    .file-list { list-style: none; }
+    .file-item { cursor: grab; user-select: none; }
+    .file-item.drag-over-item { border-color: var(--accent); background: rgba(255,85,51,0.05); }
+    .drag-handle { color: var(--muted); cursor: grab; padding: 0 0.5rem; }
+  </style>
+</head>
+<body>
+
+<nav>
+  <a class="nav-logo" href="../index.html">PDF<span>Tools</span></a>
+</nav>
+
+<div class="tool-page">
+  <div class="tool-page-header">
+    <a class="back-link" href="../index.html">← Back to tools</a>
+    <h1>🔗 PDF Merger</h1>
+    <p>Add multiple PDF files and merge them into one. Drag to reorder.</p>
+  </div>
+
+  <div class="drop-zone" id="dropZone">
+    <input type="file" accept=".pdf" multiple id="fileInput">
+    <div class="drop-icon">📎</div>
+    <h3>Drop PDF files here</h3>
+    <p>or click to browse — you can add multiple files</p>
+  </div>
+
+  <div id="fileList" class="file-list"></div>
+
+  <div class="btn-group">
+    <button class="btn btn-primary" id="mergeBtn" disabled>🔗 Merge PDFs</button>
+    <button class="btn btn-secondary" id="clearBtn" style="display:none">✕ Clear All</button>
+  </div>
+
+  <div class="progress-bar" id="progressBar" style="display:none">
+    <div class="progress-fill" id="progressFill"></div>
+  </div>
+
+  <div class="status-msg" id="status"></div>
+</div>
+
+<script src="https://unpkg.com/pdf-lib@1.17.1/dist/pdf-lib.min.js"></script>
+<script src="../js/common.js"></script>
+<script>
+  const { PDFDocument } = PDFLib;
+  let files = [];
+  let dragSrcIdx = null;
+
+  const fileListEl = document.getElementById('fileList');
+  const mergeBtn = document.getElementById('mergeBtn');
+  const clearBtn = document.getElementById('clearBtn');
+  const status = document.getElementById('status');
+  const progressBar = document.getElementById('progressBar');
+  const progressFill = document.getElementById('progressFill');
+
+  function renderList() {
+    fileListEl.innerHTML = '';
+    files.forEach((file, i) => {
+      const item = document.createElement('div');
+      item.className = 'file-item';
+      item.draggable = true;
+      item.innerHTML = `
+        <span class="drag-handle">⠿</span>
+        <span>📄</span>
+        <span class="file-name">${file.name}</span>
+        <span class="file-size">${Utils.formatBytes(file.size)}</span>
+        <button class="remove-btn" data-idx="${i}">✕</button>
+      `;
+      item.addEventListener('dragstart', () => { dragSrcIdx = i; item.classList.add('dragging'); });
+      item.addEventListener('dragend', () => item.classList.remove('dragging'));
+      item.addEventListener('dragover', e => { e.preventDefault(); item.classList.add('drag-over-item'); });
+      item.addEventListener('dragleave', () => item.classList.remove('drag-over-item'));
+      item.addEventListener('drop', e => {
+        e.preventDefault();
+        item.classList.remove('drag-over-item');
+        if (dragSrcIdx !== null && dragSrcIdx !== i) {
+          const moved = files.splice(dragSrcIdx, 1)[0];
+          files.splice(i, 0, moved);
+          renderList();
+        }
+      });
+      item.querySelector('.remove-btn').onclick = () => {
+        files.splice(i, 1);
+        renderList();
+        updateButtons();
+      };
+      fileListEl.appendChild(item);
+    });
+    updateButtons();
+  }
+
+  function updateButtons() {
+    mergeBtn.disabled = files.length < 2;
+    clearBtn.style.display = files.length > 0 ? 'inline-flex' : 'none';
+  }
+
+  Utils.setupDropZone(document.getElementById('dropZone'), newFiles => {
+    files.push(...newFiles.filter(f => f.type === 'application/pdf' || f.name.endsWith('.pdf')));
+    renderList();
+  });
+
+  clearBtn.onclick = () => { files = []; renderList(); Utils.hideStatus(status); };
+
+  mergeBtn.onclick = async () => {
+    mergeBtn.disabled = true;
+    progressBar.style.display = 'block';
+    Utils.showStatus(status, 'Merging PDFs...', 'info');
+    try {
+      const merged = await PDFDocument.create();
+      for (let i = 0; i < files.length; i++) {
+        Utils.setProgress(progressFill, ((i) / files.length) * 100);
+        const bytes = await Utils.readFileAsArrayBuffer(files[i]);
+        const doc = await PDFDocument.load(bytes, { ignoreEncryption: true });
+        const pages = await merged.copyPages(doc, doc.getPageIndices());
+        pages.forEach(p => merged.addPage(p));
+      }
+      Utils.setProgress(progressFill, 100);
+      const pdfBytes = await merged.save();
+      Utils.downloadBlob(new Blob([pdfBytes], { type: 'application/pdf' }), 'merged.pdf');
+      Utils.showStatus(status, `✓ Successfully merged ${files.length} files!`, 'success');
+    } catch (err) {
+      Utils.showStatus(status, '✕ Error merging: ' + err.message, 'error');
+    } finally {
+      mergeBtn.disabled = false;
+      setTimeout(() => progressBar.style.display = 'none', 1500);
+    }
+  };
+</script>
+</body>
+</html>

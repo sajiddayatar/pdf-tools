@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Word to PDF — PDFTools</title>
+  <link rel="stylesheet" href="../css/style.css">
+  <style>
+    #preview { background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); padding:2rem; margin-top:1.5rem; max-height:500px; overflow-y:auto; color:var(--text); font-family:Georgia,serif; line-height:1.7; }
+    #preview h1,#preview h2,#preview h3 { font-family:var(--font-head); margin-bottom:0.5em; }
+    #preview p { margin-bottom:1em; }
+    #preview table { border-collapse:collapse; width:100%; margin-bottom:1em; }
+    #preview td,#preview th { border:1px solid var(--border); padding:0.5rem; font-size:0.85rem; }
+  </style>
+</head>
+<body>
+
+<nav>
+  <a class="nav-logo" href="../index.html">PDF<span>Tools</span></a>
+</nav>
+
+<div class="tool-page">
+  <div class="tool-page-header">
+    <a class="back-link" href="../index.html">← Back to tools</a>
+    <h1>📝 Word → PDF</h1>
+    <p>Convert .docx Word documents to PDF format directly in your browser.</p>
+  </div>
+
+  <div class="drop-zone" id="dropZone">
+    <input type="file" accept=".docx,.doc" id="fileInput">
+    <div class="drop-icon">📝</div>
+    <h3>Drop your Word document here</h3>
+    <p>or click to browse — supports .docx files</p>
+  </div>
+
+  <div id="info" style="display:none">
+    <div class="file-list" id="fileItem"></div>
+
+    <div class="controls">
+      <div class="control-row">
+        <div class="control-group">
+          <label>PAGE SIZE</label>
+          <select id="pageSize">
+            <option value="A4" selected>A4 (210 × 297mm)</option>
+            <option value="Letter">Letter (8.5 × 11in)</option>
+            <option value="Legal">Legal (8.5 × 14in)</option>
+          </select>
+        </div>
+        <div class="control-group">
+          <label>ORIENTATION</label>
+          <select id="orientation">
+            <option value="portrait" selected>Portrait</option>
+            <option value="landscape">Landscape</option>
+          </select>
+        </div>
+        <div class="control-group">
+          <label>MARGIN (pt)</label>
+          <input type="number" id="margin" value="50" min="10" max="120">
+        </div>
+      </div>
+    </div>
+
+    <div class="btn-group">
+      <button class="btn btn-primary" id="convertBtn">📝 Convert to PDF</button>
+    </div>
+
+    <div class="progress-bar" id="progressBar" style="display:none">
+      <div class="progress-fill" id="progressFill"></div>
+    </div>
+    <div class="status-msg" id="status"></div>
+
+    <p style="color:var(--muted);font-size:0.8rem;margin-top:1rem">Preview:</p>
+    <div id="preview"></div>
+  </div>
+</div>
+
+<script src="https://unpkg.com/mammoth@1.6.0/mammoth.browser.min.js"></script>
+<script src="https://unpkg.com/pdf-lib@1.17.1/dist/pdf-lib.min.js"></script>
+<script src="../js/common.js"></script>
+<script>
+  const { PDFDocument, rgb, StandardFonts } = PDFLib;
+  let currentFile = null;
+  let extractedHtml = '';
+
+  Utils.setupDropZone(document.getElementById('dropZone'), async files => {
+    if (!files[0]) return;
+    currentFile = files[0];
+    document.getElementById('fileItem').innerHTML = '';
+    document.getElementById('fileItem').appendChild(
+      Utils.createFileItem(currentFile, () => { currentFile = null; document.getElementById('info').style.display = 'none'; })
+    );
+    document.getElementById('info').style.display = 'block';
+    await previewDoc(currentFile);
+  });
+
+  async function previewDoc(file) {
+    Utils.showStatus(document.getElementById('status'), 'Parsing document...', 'info');
+    const arrayBuffer = await Utils.readFileAsArrayBuffer(file);
+    const result = await mammoth.convertToHtml({ arrayBuffer });
+    extractedHtml = result.value;
+    document.getElementById('preview').innerHTML = extractedHtml;
+    Utils.hideStatus(document.getElementById('status'));
+  }
+
+  document.getElementById('convertBtn').onclick = async () => {
+    if (!currentFile || !extractedHtml) return;
+    const btn = document.getElementById('convertBtn');
+    btn.disabled = true;
+    const status = document.getElementById('status');
+    const progressBar = document.getElementById('progressBar');
+    const progressFill = document.getElementById('progressFill');
+    progressBar.style.display = 'block';
+    Utils.showStatus(status, 'Converting to PDF...', 'info');
+    Utils.setProgress(progressFill, 20);
+
+    try {
+      const pdfDoc = await PDFDocument.create();
+      const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
+      const boldFont = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
+
+      const pageSize = document.getElementById('pageSize').value;
+      const orientation = document.getElementById('orientation').value;
+      const margin = parseInt(document.getElementById('margin').value) || 50;
+
+      let width, height;
+      if (pageSize === 'A4') { width = 595; height = 842; }
+      else if (pageSize === 'Letter') { width = 612; height = 792; }
+      else { width = 612; height = 1008; }
+
+      if (orientation === 'landscape') { [width, height] = [height, width]; }
+
+      // Parse HTML content into text blocks
+      const parser = new DOMParser();
+      const doc = parser.parseFromString(extractedHtml, 'text/html');
+      const elements = Array.from(doc.body.childNodes);
+
+      let page = pdfDoc.addPage([width, height]);
+      let y = height - margin;
+      const maxWidth = width - margin * 2;
+
+      function addPage() {
+        page = pdfDoc.addPage([width, height]);
+        y = height - margin;
+        return page;
+      }
+
+      function wrapText(text, size, f) {
+        const words = text.split(' ');
+        const lines = [];
+        let line = '';
+        for (const word of words) {
+          const test = line ? line + ' ' + word : word;
+          if (f.widthOfTextAtSize(test, size) > maxWidth) {
+            if (line) lines.push(line);
+            line = word;
+          } else {
+            line = test;
+          }
+        }
+        if (line) lines.push(line);
+        return lines;
+      }
+
+      function drawLines(lines, size, f, lineHeight) {
+        for (const line of lines) {
+          if (y < margin + size) { addPage(); }
+          page.drawText(line, { x: margin, y, size, font: f, color: rgb(0.1,0.1,0.1) });
+          y -= lineHeight;
+        }
+      }
+
+      Utils.setProgress(progressFill, 50);
+
+      for (const el of elements) {
+        const tag = el.nodeName.toLowerCase();
+        const text = (el.textContent || '').trim();
+        if (!text) { y -= 8; continue; }
+
+        if (tag === 'h1') {
+          if (y < margin + 30) addPage();
+          drawLines(wrapText(text, 20, boldFont, 28), 20, boldFont, 28);
+          y -= 10;
+        } else if (tag === 'h2') {
+          if (y < margin + 25) addPage();
+          drawLines(wrapText(text, 16, boldFont, 22), 16, boldFont, 22);
+          y -= 8;
+        } else if (tag === 'h3') {
+          drawLines(wrapText(text, 13, boldFont, 18), 13, boldFont, 18);
+          y -= 6;
+        } else if (tag === 'p') {
+          drawLines(wrapText(text, 11, font, 17), 11, font, 17);
+          y -= 8;
+        } else if (tag === 'ul' || tag === 'ol') {
+          const items = Array.from(el.querySelectorAll('li'));
+          items.forEach((li, idx) => {
+            const bullet = tag === 'ol' ? `${idx + 1}. ` : '• ';
+            drawLines(wrapText(bullet + li.textContent.trim(), 11, font, 16), 11, font, 16);
+          });
+          y -= 8;
+        } else {
+          drawLines(wrapText(text, 11, font, 17), 11, font, 17);
+        }
+      }
+
+      Utils.setProgress(progressFill, 90);
+      const outBytes = await pdfDoc.save();
+      Utils.downloadBlob(new Blob([outBytes], { type: 'application/pdf' }), currentFile.name.replace(/\.(doc|docx)$/, '') + '.pdf');
+      Utils.setProgress(progressFill, 100);
+      Utils.showStatus(status, `✓ Converted to PDF (${pdfDoc.getPageCount()} pages)!`, 'success');
+    } catch (err) {
+      Utils.showStatus(status, '✕ Error: ' + err.message, 'error');
+    } finally {
+      btn.disabled = false;
+      setTimeout(() => progressBar.style.display = 'none', 1500);
+    }
+  };
+</script>
+</body>
+</html>

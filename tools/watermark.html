@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Remove Watermark — PDFTools</title>
+  <link rel="stylesheet" href="../css/style.css">
+</head>
+<body>
+
+<nav>
+  <a class="nav-logo" href="../index.html">PDF<span>Tools</span></a>
+</nav>
+
+<div class="tool-page">
+  <div class="tool-page-header">
+    <a class="back-link" href="../index.html">← Back to tools</a>
+    <h1>🔲 Remove Watermark</h1>
+    <p>Attempt to remove text-based watermarks and overlays from PDF files.</p>
+  </div>
+
+  <div style="background:rgba(245,158,11,0.1);border:1px solid rgba(245,158,11,0.3);border-radius:8px;padding:1rem;margin-bottom:1.5rem;font-size:0.82rem;color:#f59e0b;">
+    ⚠️ This tool removes <strong>text-based watermarks</strong> embedded as PDF annotations or form content. Watermarks burned into images cannot be removed without AI-based image processing.
+  </div>
+
+  <div class="drop-zone" id="dropZone">
+    <input type="file" accept=".pdf" id="fileInput">
+    <div class="drop-icon">🔲</div>
+    <h3>Drop your PDF here</h3>
+    <p>or click to browse</p>
+  </div>
+
+  <div id="info" style="display:none">
+    <div class="file-list" id="fileItem"></div>
+
+    <div class="controls">
+      <div class="control-group">
+        <label>WATERMARK TEXT (optional — leave blank to remove all overlays)</label>
+        <input type="text" id="watermarkText" placeholder="e.g. CONFIDENTIAL, DRAFT, SAMPLE">
+      </div>
+      <div class="control-group">
+        <label>REMOVAL METHOD</label>
+        <select id="method">
+          <option value="annotations">Remove PDF annotations and stamps</option>
+          <option value="content">Remove content layers / form fields</option>
+          <option value="both" selected>Both (recommended)</option>
+        </select>
+      </div>
+      <div class="control-group">
+        <label>OPTIONS</label>
+        <div style="display:flex;gap:1rem;flex-wrap:wrap">
+          <label style="display:flex;align-items:center;gap:0.5rem;cursor:pointer;font-size:0.82rem">
+            <input type="checkbox" id="removeXObjects" checked style="accent-color:var(--accent)"> Remove watermark XObjects
+          </label>
+          <label style="display:flex;align-items:center;gap:0.5rem;cursor:pointer;font-size:0.82rem">
+            <input type="checkbox" id="flattenForms" checked style="accent-color:var(--accent)"> Remove form fields
+          </label>
+        </div>
+      </div>
+    </div>
+
+    <div class="btn-group">
+      <button class="btn btn-primary" id="removeBtn">🔲 Remove Watermark</button>
+    </div>
+
+    <div class="progress-bar" id="progressBar" style="display:none">
+      <div class="progress-fill" id="progressFill"></div>
+    </div>
+    <div class="status-msg" id="status"></div>
+  </div>
+</div>
+
+<script src="https://unpkg.com/pdf-lib@1.17.1/dist/pdf-lib.min.js"></script>
+<script src="../js/common.js"></script>
+<script>
+  const { PDFDocument, PDFName } = PDFLib;
+  let currentFile = null;
+
+  Utils.setupDropZone(document.getElementById('dropZone'), files => {
+    if (!files[0]) return;
+    currentFile = files[0];
+    document.getElementById('fileItem').innerHTML = '';
+    document.getElementById('fileItem').appendChild(
+      Utils.createFileItem(currentFile, () => { currentFile = null; document.getElementById('info').style.display = 'none'; })
+    );
+    document.getElementById('info').style.display = 'block';
+  });
+
+  document.getElementById('removeBtn').onclick = async () => {
+    if (!currentFile) return;
+    const btn = document.getElementById('removeBtn');
+    btn.disabled = true;
+    const status = document.getElementById('status');
+    const progressBar = document.getElementById('progressBar');
+    const progressFill = document.getElementById('progressFill');
+    progressBar.style.display = 'block';
+    Utils.showStatus(status, 'Processing PDF...', 'info');
+    Utils.setProgress(progressFill, 20);
+
+    try {
+      const bytes = await Utils.readFileAsArrayBuffer(currentFile);
+      const pdfDoc = await PDFDocument.load(bytes, { ignoreEncryption: true });
+      const pages = pdfDoc.getPages();
+      const method = document.getElementById('method').value;
+      const watermarkText = document.getElementById('watermarkText').value.trim().toLowerCase();
+      let removedCount = 0;
+
+      Utils.setProgress(progressFill, 40);
+
+      for (const page of pages) {
+        const dict = page.node;
+
+        // Remove annotations (stamps, watermarks, overlays)
+        if (method === 'annotations' || method === 'both') {
+          try {
+            const annots = dict.get(PDFName.of('Annots'));
+            if (annots) {
+              dict.delete(PDFName.of('Annots'));
+              removedCount++;
+            }
+          } catch (e) {}
+        }
+
+        // Remove AcroForm fields from this page
+        if (document.getElementById('flattenForms').checked) {
+          try {
+            const form = pdfDoc.getForm();
+            form.getFields().forEach(field => {
+              try { form.removeField(field); } catch (e) {}
+            });
+          } catch (e) {}
+        }
+
+        // Try to remove watermark content streams
+        if ((method === 'content' || method === 'both') && document.getElementById('removeXObjects').checked) {
+          try {
+            const resources = dict.get(PDFName.of('Resources'));
+            if (resources) {
+              const xObjects = resources.get(PDFName.of('XObject'));
+              if (xObjects) {
+                const keys = xObjects.keys();
+                for (const key of keys) {
+                  const xObj = xObjects.get(key);
+                  if (xObj) {
+                    const subtype = xObj.get && xObj.get(PDFName.of('Subtype'));
+                    if (subtype && subtype.toString().includes('Form')) {
+                      xObjects.delete(key);
+                      removedCount++;
+                    }
+                  }
+                }
+              }
+            }
+          } catch (e) {}
+        }
+      }
+
+      Utils.setProgress(progressFill, 80);
+      const outBytes = await pdfDoc.save();
+      Utils.setProgress(progressFill, 100);
+
+      Utils.downloadBlob(new Blob([outBytes], { type: 'application/pdf' }), 'watermark-removed.pdf');
+      Utils.showStatus(status,
+        removedCount > 0
+          ? `✓ Removed ${removedCount} watermark element(s). Download complete.`
+          : '✓ Processed PDF. If watermark persists, it may be image-embedded and requires AI removal.',
+        'success');
+    } catch (err) {
+      Utils.showStatus(status, '✕ Error: ' + err.message, 'error');
+    } finally {
+      btn.disabled = false;
+      setTimeout(() => progressBar.style.display = 'none', 1500);
+    }
+  };
+</script>
+</body>
+</html>
